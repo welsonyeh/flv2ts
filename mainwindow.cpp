@@ -16,10 +16,16 @@ MainWindow::~MainWindow()
     delete ui;
 }
 
+void MainWindow::parseVideoData()
+{
+
+
+}
+
 void MainWindow::parseFlvSHeader(QDataStream &in)
 {
     bsbuf  = new unsigned char[6<<20];
-    unsigned char* ptr = bsbuf;
+    ptr = bsbuf;
     in.readRawData((char*)bsbuf, 6<<20);
     rptr = 0;
     wptr = 6<<20;
@@ -53,7 +59,21 @@ void MainWindow::parseFlvSHeader(QDataStream &in)
             ui->textBrowser->append("\nVideo Data!");
             unsigned int DataSz = ((*(++ptr))<<16)|((*(++ptr))<<8)|(*(++ptr));
             ui->textBrowser->append("Data size: " + QString::number(DataSz));
-            ptr += 8 + DataSz;
+
+            unsigned int Timestamp = ((*(++ptr))<<16)|((*(++ptr))<<8)|(*(++ptr))|((*(++ptr))<<24);
+            ui->textBrowser->append("Timestamp: " + QString::number(Timestamp));
+
+            unsigned int StreamID = ((*(++ptr))<<16)|((*(++ptr))<<8)|(*(++ptr));
+            ui->textBrowser->append("StreamID: " + QString::number(StreamID));
+
+            unsigned int FrameType = (*(++ptr))&0xF0;
+            unsigned int CodecID = (*ptr)&0xF;
+            unsigned int AvcPacketType = *(++ptr);
+            if(AvcPacketType == 0) // sequence
+                ptr += (DataSz - 2);
+            else if(AvcPacketType == 1) // NALU
+                parseVideoData();
+            //ptr += 8 + DataSz;
         }
         else if(*ptr == 8)
         {

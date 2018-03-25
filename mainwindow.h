@@ -19,10 +19,12 @@ private slots:
     void on_pushButton_clicked();
     void open(QString&);
     void parseFlvSHeader(QDataStream&);
+    void parseVideoData();
 
 private:
     Ui::MainWindow *ui;
     unsigned char* bsbuf;
+    unsigned char* ptr;
     unsigned int wptr;
     unsigned int rptr;
 };
