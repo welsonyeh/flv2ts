@@ -1,7 +1,7 @@
 #include "mainwindow.h"
 #include "ui_mainwindow.h"
 #include <QFileDialog>
-#include <QFile>
+
 #include <iostream>
 #include <cstdio>
 MainWindow::MainWindow(QWidget *parent) :
@@ -16,10 +16,55 @@ MainWindow::~MainWindow()
     delete ui;
 }
 
-void MainWindow::parseVideoData()
+void MainWindow::parseVideoData(int dataSz)
 {
+    char pts[5];
+    while(dataSz > 0)
+    {
+        unsigned int PayloadSz = ((*(++ptr))<<24)|((*(++ptr))<<16)|((*(++ptr))<<8)|(*(++ptr));
+        std::cout<<"Payload Size: "<<PayloadSz<<std::endl;
+        out.writeRawData((const char*)pes_header,9);
+        {
+            pts[0] = (0x3<<4|(_Timestamp&0xC0000000)>>27|0x1)&(0x37);
+        }
+        ++ptr;
+        out.writeRawData((const char*)ptr,PayloadSz);
+        ptr += (PayloadSz-1);
 
+        dataSz = dataSz - PayloadSz - 4;
+        std::cout<<"Data Remain Size: "<<dataSz<<std::endl;
+    }
+    ++ptr;
+}
 
+void MainWindow::parseAVCDecoderConfigurationRecord()
+{
+    unsigned int Version = *(++ptr);
+    unsigned int Profile = *(++ptr);
+    unsigned int ProfileCompact = *(++ptr);
+    unsigned int Level = *(++ptr);
+    unsigned int NumBytePresentNaluSize = *(++ptr);
+    NumBytePresentNaluSize &= 0x3;
+    NumBytePresentNaluSize++;
+
+    const unsigned char seq_pes_header[13]={0x0,0x0,0x01,0xE0,0x0,0x0,0x8B,0x0,0x0,0x0,0x0,0x0,0x01};
+    unsigned int SpsNum = *(++ptr);
+    SpsNum &= 0x1F;
+    unsigned int SpsSize = (*(++ptr))<<8|(*(++ptr));
+    std::cout<<"SPS Size: "<<SpsSize<<std::endl;
+    out.writeRawData((const char*)seq_pes_header,13);
+    ++ptr; //point to SPS NALU Type
+    out.writeRawData((const char*)ptr,SpsSize);
+    ptr += SpsSize;
+
+    unsigned int PpsNum = *ptr;
+    unsigned int PpsSize = (*(++ptr))<<8|(*(++ptr));
+    std::cout<<"PPS Size: "<<PpsSize<<std::endl;
+    out.writeRawData((const char*)seq_pes_header,13);
+    ++ptr; //point to PPS NALU Type
+    out.writeRawData((const char*)ptr,PpsSize);
+    ptr += PpsSize;
+    //outFile.close();
 }
 
 void MainWindow::parseFlvSHeader(QDataStream &in)
@@ -45,7 +90,7 @@ void MainWindow::parseFlvSHeader(QDataStream &in)
     ptr += 4; // PreviousTagSize0 always be 0
 
     int n = 0;
-    while(n < 50)
+    while(n < 5000)
     {
         if(*ptr == 18)
         {
@@ -60,7 +105,7 @@ void MainWindow::parseFlvSHeader(QDataStream &in)
             unsigned int DataSz = ((*(++ptr))<<16)|((*(++ptr))<<8)|(*(++ptr));
             ui->textBrowser->append("Data size: " + QString::number(DataSz));
 
-            unsigned int Timestamp = ((*(++ptr))<<16)|((*(++ptr))<<8)|(*(++ptr))|((*(++ptr))<<24);
+            _Timestamp = ((*(++ptr))<<16)|((*(++ptr))<<8)|(*(++ptr))|((*(++ptr))<<24);
             ui->textBrowser->append("Timestamp: " + QString::number(Timestamp));
 
             unsigned int StreamID = ((*(++ptr))<<16)|((*(++ptr))<<8)|(*(++ptr));
@@ -69,10 +114,11 @@ void MainWindow::parseFlvSHeader(QDataStream &in)
             unsigned int FrameType = (*(++ptr))&0xF0;
             unsigned int CodecID = (*ptr)&0xF;
             unsigned int AvcPacketType = *(++ptr);
+            unsigned int CompositionTime = ((*(++ptr))<<16)|((*(++ptr))<<8)|(*(++ptr));
             if(AvcPacketType == 0) // sequence
-                ptr += (DataSz - 2);
+                parseAVCDecoderConfigurationRecord();
             else if(AvcPacketType == 1) // NALU
-                parseVideoData();
+                parseVideoData(DataSz-5);
             //ptr += 8 + DataSz;
         }
         else if(*ptr == 8)
@@ -95,7 +141,14 @@ void MainWindow::open(QString& FileName)
     file.open(QIODevice::ReadOnly);
     QDataStream in(&file);
 
+    outFile.setFileName(FileName+".mpg");
+    outFile.open(QIODevice::WriteOnly);
+    out.setDevice(&outFile);
+
+
     parseFlvSHeader(in);
+
+
 
 }
 
