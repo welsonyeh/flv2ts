@@ -22,6 +22,7 @@ private slots:
     void parseFlvSHeader(QDataStream&);
     void parseVideoData(int);
     void parseAVCDecoderConfigurationRecord();
+    void generatePSI();
 
 private:
     Ui::MainWindow *ui;
