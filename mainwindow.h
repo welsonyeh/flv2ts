@@ -23,17 +23,23 @@ private slots:
     void parseVideoData(int);
     void parseAVCDecoderConfigurationRecord();
     void generatePSI();
+    void xEs2TsPacketizeEx(unsigned int);
 
 private:
     Ui::MainWindow *ui;
     unsigned char* bsbuf;
     unsigned char* ptr;
-    unsigned int wptr;
-    unsigned int rptr;
-    QDataStream out;
-    QFile outFile;
-    const unsigned char pes_header[9]={0x0,0x0,0x01,0xE0,0x0,0x0,0x8B,0x80,0x05};
-    unsigned int _Timestamp;
+    unsigned char* outbuf_head;
+    unsigned char* outbuf_cur;
+    unsigned char  _CC;
+    unsigned char* pCC;
+    unsigned char pbSPS[256];
+    unsigned char pbPPS[256];
+    unsigned char* pExtHdr;
+    unsigned int dExtHdrSz;
+    unsigned char* pData;
+
+    unsigned int dPTS;
 };
 
 #endif // MAINWINDOW_H
