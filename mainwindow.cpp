@@ -121,6 +121,8 @@ void MainWindow::parseVideoData(int dataSz)
         pData[3] = 0x01;
         xEs2TsPacketizeEx(PayloadSz+4);
         ptr += PayloadSz;
+        dataSz -= (PayloadSz+4);
+        std::cout<<"DATA SZ: "<<std::dec<<dataSz<<std::endl;
     }
     ++ptr;
 
@@ -210,8 +212,9 @@ void MainWindow::xEs2TsPacketizeEx(unsigned int dChunkSize)
     unsigned int pid = DTV_MUX_PID_VIDEO;
     unsigned int bStreamID = DTV_MUX_STREAM_ID_VIDEO;
     int dPesHdrLen = (dPTS != DTV_MUX_INVALID_PTS) ? DTV_MUX_PES_HEADER_LEN : DTV_MUX_PES_HEADER_LEN_WO_PTS;
-    bAFCtrl = dChunkSize >= (DTV_MUX_TS_PKT_SIZE - DTV_MUX_TS_PKT_HDR_SIZE - (bPUSI ? dPesHdrLen : 0)) ? 0x1 : 0x3;
 
+
+    std::cout<<"ORIG CHUNK: "<<std::hex<<dChunkSize<<std::endl;
     while (dChunkSize > 0)
     {
         dIdx = 0;
@@ -221,6 +224,7 @@ void MainWindow::xEs2TsPacketizeEx(unsigned int dChunkSize)
         pBuf[dIdx++] = ((bAFCtrl << 4) & 0xF0) | (*pCC & 0xF);
         *pCC = (*pCC + 1) & 0xF;
 
+        bAFCtrl = dChunkSize >= (DTV_MUX_TS_PKT_SIZE - DTV_MUX_TS_PKT_HDR_SIZE - (bPUSI ? dPesHdrLen : 0)) ? 0x1 : 0x3;
         if (bAFCtrl & 0x2)
         {
             unsigned char bAFLen = DTV_MUX_TS_PKT_SIZE - DTV_MUX_TS_PKT_HDR_SIZE - dChunkSize - 1;
@@ -236,6 +240,7 @@ void MainWindow::xEs2TsPacketizeEx(unsigned int dChunkSize)
                 {
                     memset(pBuf+6, 0xFF, bAFLen);
                     dIdx += bAFLen;
+                    std::cout<<"IDX: "<<dIdx<<std::endl;
                 }
             }
         }
@@ -295,7 +300,9 @@ void MainWindow::xEs2TsPacketizeEx(unsigned int dChunkSize)
             memcpy(pBuf, pData, dCopyLen);
             pData += dCopyLen;
         }
+        std::cout<<"Copy Len: "<<dCopyLen<<", chunk: "<<dChunkSize<<std::endl;
         dChunkSize -= dCopyLen;
+
     }
 }
 
@@ -431,10 +438,10 @@ void MainWindow::open(QString& FileName)
     outFile.open(QIODevice::WriteOnly);
     QDataStream out(&outFile);
 
-
     parseFlvSHeader(in);
 
-
+    out.writeRawData((const char*)outbuf_head,10<<20);
+    outFile.close();
 
 }
 
