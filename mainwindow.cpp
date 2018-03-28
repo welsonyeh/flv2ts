@@ -3,6 +3,7 @@
 #include <QFileDialog>
 #include <iostream>
 #include <cstdio>
+#include <QThread>
 
 #define PID_STREAM_TYPE_VIDEO_AVC       (0x1B)
 #define DTV_MUX_PID_VIDEO               (0x1011)
@@ -119,39 +120,13 @@ void MainWindow::parseVideoData(int dataSz)
         pData[1] = 0x0;
         pData[2] = 0x0;
         pData[3] = 0x01;
+
         xEs2TsPacketizeEx(PayloadSz+4);
         ptr += PayloadSz;
         dataSz -= (PayloadSz+4);
-        std::cout<<"DATA SZ: "<<std::dec<<dataSz<<std::endl;
+        //std::cout<<"DATA SZ: "<<std::dec<<dataSz<<std::endl;
     }
     ++ptr;
-
-#if 0
-    char pts[5];
-    char stcode[4] = {0x0, 0x0, 0x0, 0x1};
-    while(dataSz > 0)
-    {
-        unsigned int PayloadSz = ((*(++ptr))<<24)|((*(++ptr))<<16)|((*(++ptr))<<8)|(*(++ptr));
-        std::cout<<"Payload Size: "<<PayloadSz<<std::endl;
-        out.writeRawData((const char*)pes_header,9);
-        {
-            pts[0] = (0x2<<4|((_Timestamp&0xC0000000)>>29)|0x1)&(0xF7);
-            pts[1] = (_Timestamp&0x3FC00000)>>22;
-            pts[2] = ((_Timestamp&0x3F8000)>>15<<1)|0x1;
-            pts[3] = (_Timestamp&0x7F80)>>14;
-            pts[4] = ((_Timestamp&0x7F)<<1)|0x1;
-            out.writeRawData((const char*)pts,5);
-        }
-        out.writeRawData((const char*)stcode,4);
-        ++ptr;
-        out.writeRawData((const char*)ptr,PayloadSz);
-        ptr += (PayloadSz-1);
-
-        dataSz = dataSz - PayloadSz - 4;
-        std::cout<<"Data Remain Size: "<<dataSz<<std::endl;
-    }
-    ++ptr;
-#endif
 }
 
 unsigned int GL_CRC32(unsigned char *pBuffer, unsigned int dSize)
@@ -174,7 +149,7 @@ void MainWindow::generatePSI()
     pPAT[3] = *pCC;
     *pCC = (*pCC + 1) & 0xF;
     outbuf_cur += 188;
-
+    outFile.write((const char*)PAT,188);
 
     //PMT
     memcpy(outbuf_cur, PMT, 188);
@@ -199,6 +174,7 @@ void MainWindow::generatePSI()
     pPMT[dIdx++] = (dCrc32 >> 8) & 0xFF;
     pPMT[dIdx++] = dCrc32 & 0xFF;
     outbuf_cur += 188;
+    outFile.write((const char*)pPMT,188);
 }
 
 void MainWindow::xEs2TsPacketizeEx(unsigned int dChunkSize)
@@ -214,17 +190,20 @@ void MainWindow::xEs2TsPacketizeEx(unsigned int dChunkSize)
     int dPesHdrLen = (dPTS != DTV_MUX_INVALID_PTS) ? DTV_MUX_PES_HEADER_LEN : DTV_MUX_PES_HEADER_LEN_WO_PTS;
 
 
-    std::cout<<"ORIG CHUNK: "<<std::hex<<dChunkSize<<std::endl;
+    //std::cout<<"ORIG CHUNK: "<<dChunkSize<<std::endl;
+    //std::cout<<"OUTBUF DIFF: "<<(unsigned int)(outbuf_cur-outbuf_head)<<std::endl<<std::endl;
     while (dChunkSize > 0)
     {
         dIdx = 0;
         pBuf[dIdx++] = DTV_MUX_TS_SYNC_BYTE;
         pBuf[dIdx++] = (((bPUSI) ? 0x40 : 0x0) | (pid >> 8)) & 0xFF;
         pBuf[dIdx++] = (pid & 0xFF);
+
+        bAFCtrl = dChunkSize >= (DTV_MUX_TS_PKT_SIZE - DTV_MUX_TS_PKT_HDR_SIZE - (bPUSI ? dPesHdrLen : 0)) ? 0x1 : 0x3;
         pBuf[dIdx++] = ((bAFCtrl << 4) & 0xF0) | (*pCC & 0xF);
         *pCC = (*pCC + 1) & 0xF;
 
-        bAFCtrl = dChunkSize >= (DTV_MUX_TS_PKT_SIZE - DTV_MUX_TS_PKT_HDR_SIZE - (bPUSI ? dPesHdrLen : 0)) ? 0x1 : 0x3;
+
         if (bAFCtrl & 0x2)
         {
             unsigned char bAFLen = DTV_MUX_TS_PKT_SIZE - DTV_MUX_TS_PKT_HDR_SIZE - dChunkSize - 1;
@@ -240,7 +219,7 @@ void MainWindow::xEs2TsPacketizeEx(unsigned int dChunkSize)
                 {
                     memset(pBuf+6, 0xFF, bAFLen);
                     dIdx += bAFLen;
-                    std::cout<<"IDX: "<<dIdx<<std::endl;
+                    //std::cout<<"IDX: "<<std::dec<<dIdx<<std::endl;
                 }
             }
         }
@@ -297,12 +276,13 @@ void MainWindow::xEs2TsPacketizeEx(unsigned int dChunkSize)
 
         if (dCopyLen) // copy video es data
         {
-            memcpy(pBuf, pData, dCopyLen);
+            memcpy(pBuf+dIdx, pData, dCopyLen);
             pData += dCopyLen;
         }
-        std::cout<<"Copy Len: "<<dCopyLen<<", chunk: "<<dChunkSize<<std::endl;
+        //std::cout<<"Copy Len: "<<dCopyLen<<", chunk: "<<dChunkSize<<std::endl;
         dChunkSize -= dCopyLen;
-
+        outFile.write((const char*)pBuf,188);
+        outbuf_cur += 188;
     }
 }
 
@@ -323,9 +303,7 @@ void MainWindow::parseAVCDecoderConfigurationRecord()
     SpsNum &= 0x1F;
     unsigned int SpsSize = (*(++ptr))<<8|(*(++ptr));
     std::cout<<"SPS Size: "<<SpsSize<<std::endl;
-    //out.writeRawData((const char*)seq_pes_header,13);
     ++ptr; //point to SPS NALU Type
-    //out.writeRawData((const char*)ptr,SpsSize);
     pbSPS[0] = 0x0;
     pbSPS[1] = 0x0;
     pbSPS[2] = 0x0;
@@ -333,6 +311,7 @@ void MainWindow::parseAVCDecoderConfigurationRecord()
     memcpy(pbSPS+4, ptr, SpsSize);
     dExtHdrSz = SpsSize+4;
     pExtHdr = pbSPS;
+    dPTS = DTV_MUX_INVALID_PTS;
     xEs2TsPacketizeEx(dExtHdrSz);
     ptr += SpsSize;
 
@@ -340,11 +319,8 @@ void MainWindow::parseAVCDecoderConfigurationRecord()
     //PPS
     unsigned int PpsNum = *ptr;
     unsigned int PpsSize = (*(++ptr))<<8|(*(++ptr));
-    //out.writeRawData((const char*)tsHeader,4);
     std::cout<<"PPS Size: "<<PpsSize<<std::endl;
-    //out.writeRawData((const char*)seq_pes_header,13);
     ++ptr; //point to PPS NALU Type
-    //out.writeRawData((const char*)ptr,PpsSize);
     pbPPS[0] = 0x0;
     pbPPS[1] = 0x0;
     pbPPS[2] = 0x0;
@@ -352,12 +328,15 @@ void MainWindow::parseAVCDecoderConfigurationRecord()
     memcpy(pbPPS+4, ptr, SpsSize);
     dExtHdrSz = PpsSize+4;
     pExtHdr = pbPPS;
+    dPTS = DTV_MUX_INVALID_PTS;
     xEs2TsPacketizeEx(dExtHdrSz);
+    pExtHdr = NULL;
+    dExtHdrSz = 0;
     ptr += PpsSize;
 
 }
 
-void MainWindow::parseFlvSHeader(QDataStream &in)
+void MainWindow::parseFlvHeader(QDataStream &in)
 {
     bsbuf  = new unsigned char[6<<20];
     ptr = bsbuf;
@@ -382,27 +361,29 @@ void MainWindow::parseFlvSHeader(QDataStream &in)
     ptr += 9; // Header
     ptr += 4; // PreviousTagSize0 always be 0
 
-    int n = 0;
-    while(n < 500)
+    //int n = 0;
+    while(ptr-bsbuf < 6<<20)
     {
         if(*ptr == 18)
         {
-            ui->textBrowser->append("\nScript Data!");
-            unsigned int scriptDataSz = ((*(++ptr))<<16)|((*(++ptr))<<8)|(*(++ptr));
-            ui->textBrowser->append("Data size: " + QString::number(scriptDataSz));
-            ptr += 8 + scriptDataSz;
+            //ui->textBrowser->append("\nScript Data!");
+            unsigned int sTagDataSz = ((*(++ptr))<<16)|((*(++ptr))<<8)|(*(++ptr));
+            //ui->textBrowser->append("Data size: " + QString::number(sTagDataSz));
+            ptr += 8 + sTagDataSz;
         }
         else if(*ptr == 9)
         {
-            ui->textBrowser->append("\nVideo Data!");
-            unsigned int DataSz = ((*(++ptr))<<16)|((*(++ptr))<<8)|(*(++ptr));
-            ui->textBrowser->append("Data size: " + QString::number(DataSz));
+            //ui->textBrowser->append("\nVideo Data!");
+            unsigned int vTagDataSz = ((*(++ptr))<<16)|((*(++ptr))<<8)|(*(++ptr));
+            //ui->textBrowser->append("Data size: " + QString::number(vTagDataSz));
 
             dPTS = ((*(++ptr))<<16)|((*(++ptr))<<8)|(*(++ptr))|((*(++ptr))<<24);
-            ui->textBrowser->append("Timestamp: " + QString::number(dPTS));
+            dPTS *= 90;
+            dPTS = (dPTS & 0x00000000ffffffffll);
+            //ui->textBrowser->append("Timestamp: " + QString::number(dPTS));
 
             unsigned int StreamID = ((*(++ptr))<<16)|((*(++ptr))<<8)|(*(++ptr));
-            ui->textBrowser->append("StreamID: " + QString::number(StreamID));
+            //ui->textBrowser->append("StreamID: " + QString::number(StreamID));
 
             unsigned int FrameType = (*(++ptr))&0xF0;
             unsigned int CodecID = (*ptr)&0xF;
@@ -411,18 +392,18 @@ void MainWindow::parseFlvSHeader(QDataStream &in)
             if(AvcPacketType == 0) // sequence
                 parseAVCDecoderConfigurationRecord();
             else if(AvcPacketType == 1) // NALU
-                parseVideoData(DataSz-5);
-            //ptr += 8 + DataSz;
+                parseVideoData(vTagDataSz-5);
+            //ptr += 8 + vTagDataSz;
         }
         else if(*ptr == 8)
         {
-            ui->textBrowser->append("\nAudio Data!");
-            unsigned int DataSz = ((*(++ptr))<<16)|((*(++ptr))<<8)|(*(++ptr));
-            ui->textBrowser->append("Data size: " + QString::number(DataSz));
-            ptr += 8 + DataSz;
+            //ui->textBrowser->append("\nAudio Data!");
+            unsigned int aTagDataSz = ((*(++ptr))<<16)|((*(++ptr))<<8)|(*(++ptr));
+            //ui->textBrowser->append("Data size: " + QString::number(aTagDataSz));
+            ptr += 8 + aTagDataSz;
         }
         ptr += 4;
-        n++;
+        //n++;
     }
 
 
@@ -434,13 +415,11 @@ void MainWindow::open(QString& FileName)
     file.open(QIODevice::ReadOnly);
     QDataStream in(&file);
 
-    QFile outFile(FileName+".ts");
+    outFile.setFileName(FileName+".ts");
     outFile.open(QIODevice::WriteOnly);
-    QDataStream out(&outFile);
 
-    parseFlvSHeader(in);
-
-    out.writeRawData((const char*)outbuf_head,10<<20);
+    parseFlvHeader(in);
+    ui->textBrowser->append("\nREMUX done!!!!");
     outFile.close();
 
 }
@@ -449,12 +428,15 @@ void MainWindow::on_pushButton_clicked()
 {
     QString FileName;
     FileName = QFileDialog::getOpenFileName(this, "Open a Transport Stream File");
+
+    std::cout<<"Begin"<<std::endl;
     if(!FileName.isEmpty())
     {
         ui->lineEdit->setText(FileName);
         ui->lineEdit_2->setText(FileName+".ts");
     }
-
+    std::cout<<"End"<<std::endl;
+    QThread::msleep(100);
     open(FileName);
 
 }

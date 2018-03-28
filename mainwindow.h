@@ -19,7 +19,7 @@ public:
 private slots:
     void on_pushButton_clicked();
     void open(QString&);
-    void parseFlvSHeader(QDataStream&);
+    void parseFlvHeader(QDataStream&);
     void parseVideoData(int);
     void parseAVCDecoderConfigurationRecord();
     void generatePSI();
@@ -38,8 +38,9 @@ private:
     unsigned char* pExtHdr;
     unsigned int dExtHdrSz;
     unsigned char* pData;
-
-    unsigned int dPTS;
+    unsigned long long dPTS;
+    unsigned long long old_PTS;
+    QFile outFile;
 };
 
 #endif // MAINWINDOW_H
