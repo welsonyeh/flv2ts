@@ -21,6 +21,7 @@ private slots:
     void open(QString&);
     void parseFlvHeader(QDataStream&);
     void parseVideoData(int);
+    void parseAudioData(int);
     void parseAVCDecoderConfigurationRecord();
     void generatePSI();
     void xEs2TsPacketizeEx(unsigned int);
@@ -31,7 +32,8 @@ private:
     unsigned char* ptr;
     unsigned char* outbuf_head;
     unsigned char* outbuf_cur;
-    unsigned char  _CC;
+    unsigned char  CCa;
+    unsigned char  CCv;
     unsigned char* pCC;
     unsigned char pbSPS[256];
     unsigned char pbPPS[256];
@@ -40,6 +42,7 @@ private:
     unsigned char* pData;
     unsigned long long dPTS;
     unsigned long long old_PTS;
+    unsigned char bAVStreamType;
     QFile outFile;
 };
 

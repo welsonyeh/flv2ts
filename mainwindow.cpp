@@ -6,16 +6,22 @@
 #include <QThread>
 
 #define PID_STREAM_TYPE_VIDEO_AVC       (0x1B)
+#define PID_STREAM_TYPE_AUDIO_MPEG2_AAC	(0x0f)
 #define DTV_MUX_PID_VIDEO               (0x1011)
+#define DTV_MUX_PID_AUDIO				(0x1100)
 #define PMT_STREAM_TYPE_IDX             (17)
 #define DTV_MUX_PMT_SEC_LEN_IDX         (6)
 #define DTV_MUX_STREAM_ID_VIDEO         (0xE0)
+#define DTV_MUX_STREAM_ID_AUDIO			(0xC0)
 #define DTV_MUX_INVALID_PTS             (0xFFFFFFFFFFFFFFFFLL)
 #define DTV_MUX_TS_SYNC_BYTE            (0x47)
 #define DTV_MUX_PES_HEADER_LEN          (14)
 #define DTV_MUX_PES_HEADER_LEN_WO_PTS	(9)
 #define DTV_MUX_TS_PKT_SIZE				(188)
 #define DTV_MUX_TS_PKT_HDR_SIZE			(4)
+#define DTV_MUX_AAC_ADTS_HEADER_LEN		(7)
+#define DTV_MUX_STREAM_TYPE_VIDEO		(0x0)
+#define DTV_MUX_STREAM_TYPE_AUDIO		(0x1)
 
 static unsigned char PAT[188] =
 {
@@ -129,6 +135,29 @@ void MainWindow::parseVideoData(int dataSz)
     ++ptr;
 }
 
+void MainWindow::parseAudioData(int ChunkSize)
+{
+    unsigned char pHdr[8];
+    int dHdrIdx;
+    int modifyChunkSize = ChunkSize + DTV_MUX_AAC_ADTS_HEADER_LEN;
+    dHdrIdx = 0;
+    // AAC ADTS Header
+    pHdr[dHdrIdx++] = 0xFF;
+    pHdr[dHdrIdx++] = 0xF1;
+    pHdr[dHdrIdx++] = 0x40 | (0x7 << 2);	//0x50;
+    pHdr[dHdrIdx++] = 0x80 | ((modifyChunkSize & 0x1800) >> 11);
+    pHdr[dHdrIdx++] = ((modifyChunkSize & 0x7F8) >> 3);
+    pHdr[dHdrIdx++] = ((modifyChunkSize & 0x7) << 5) | 0x1F;
+    pHdr[dHdrIdx++] = 0xFC;
+    dExtHdrSz = dHdrIdx;
+    pExtHdr = pHdr;
+    pData = (ptr+1); // point to raw data begin
+    xEs2TsPacketizeEx(modifyChunkSize);
+    ptr += (ChunkSize+1);
+    dExtHdrSz = 0;
+    pExtHdr = NULL;
+}
+
 unsigned int GL_CRC32(unsigned char *pBuffer, unsigned int dSize)
 {
     register unsigned int i;
@@ -144,15 +173,15 @@ unsigned int GL_CRC32(unsigned char *pBuffer, unsigned int dSize)
 void MainWindow::generatePSI()
 {
     //PAT
-    memcpy(outbuf_cur, PAT, 188);
-    unsigned char* pPAT = outbuf_cur;
+    memcpy(outbuf_head, PAT, 188);
+    unsigned char* pPAT = outbuf_head;
     pPAT[3] = *pCC;
     *pCC = (*pCC + 1) & 0xF;
     outbuf_cur += 188;
     outFile.write((const char*)PAT,188);
 
     //PMT
-    memcpy(outbuf_cur, PMT, 188);
+    memcpy(outbuf_head+188, PMT, 188);
     unsigned char* pPMT = outbuf_cur;
     PMT[3] = *pCC;
     *pCC = (*pCC + 1) & 0xF;
@@ -161,6 +190,12 @@ void MainWindow::generatePSI()
     pPMT[dIdx++] = PID_STREAM_TYPE_VIDEO_AVC;
     pPMT[dIdx++] = 0xE0 | ((DTV_MUX_PID_VIDEO >> 8) & 0x1F);
     pPMT[dIdx++] = DTV_MUX_PID_VIDEO & 0xFF;
+    pPMT[dIdx++] = 0xF0;
+    pPMT[dIdx++] = 0x00;
+
+    pPMT[dIdx++] = PID_STREAM_TYPE_AUDIO_MPEG2_AAC;
+    pPMT[dIdx++] = 0xE0 | ((DTV_MUX_PID_AUDIO >> 8) & 0x1F);
+    pPMT[dIdx++] = DTV_MUX_PID_AUDIO & 0xFF;
     pPMT[dIdx++] = 0xF0;
     pPMT[dIdx++] = 0x00;
 
@@ -185,8 +220,22 @@ void MainWindow::xEs2TsPacketizeEx(unsigned int dChunkSize)
     unsigned int dCopyLen = 0;
     unsigned char* pBuf = outbuf_cur;
 
-    unsigned int pid = DTV_MUX_PID_VIDEO;
-    unsigned int bStreamID = DTV_MUX_STREAM_ID_VIDEO;
+    unsigned int pid = 0;
+    unsigned int bStreamID = 0;
+
+    if (bAVStreamType == DTV_MUX_STREAM_TYPE_VIDEO)
+    {
+        pid = DTV_MUX_PID_VIDEO;
+        bStreamID = DTV_MUX_STREAM_ID_VIDEO;
+        pCC = &CCv;
+    }
+    else
+    {
+        pid = DTV_MUX_PID_AUDIO;
+        bStreamID = DTV_MUX_STREAM_ID_AUDIO;
+        pCC = &CCa;
+    }
+
     int dPesHdrLen = (dPTS != DTV_MUX_INVALID_PTS) ? DTV_MUX_PES_HEADER_LEN : DTV_MUX_PES_HEADER_LEN_WO_PTS;
 
 
@@ -288,8 +337,6 @@ void MainWindow::xEs2TsPacketizeEx(unsigned int dChunkSize)
 
 void MainWindow::parseAVCDecoderConfigurationRecord()
 {
-    generatePSI();
-
     unsigned int Version = *(++ptr);
     unsigned int Profile = *(++ptr);
     unsigned int ProfileCompact = *(++ptr);
@@ -344,14 +391,17 @@ void MainWindow::parseFlvHeader(QDataStream &in)
     outbuf_cur = outbuf_head;
 
     in.readRawData((char*)bsbuf, 6<<20);
-    _CC = 0;
-    pCC = &_CC;
+    CCa = CCv = 0;
+    pCC = &CCv;
 
     // FLV
     if(bsbuf[0] == 0x46 && bsbuf[1] == 0x4C && bsbuf[2] == 0x56)
         ui->textBrowser->append("I'm FLV!!");
     else
         ui->textBrowser->append("NOT FLV GG!!");
+
+    generatePSI();
+
 
     // Header Size
     unsigned int DataOffset = (bsbuf[5]<<24)|(bsbuf[6]<<16)|(bsbuf[7]<<8)|(bsbuf[8]);
@@ -362,45 +412,69 @@ void MainWindow::parseFlvHeader(QDataStream &in)
     ptr += 4; // PreviousTagSize0 always be 0
 
     //int n = 0;
+    unsigned char TagType = 0;
+    unsigned int  TagDataSize = 0;
+    unsigned int StreamID = 0;
+    unsigned char AudioInfo = 0;
+    unsigned char AACPacketType = 0;
+    unsigned int FrameType = 0;
+    unsigned int CodecID = 0;
+    unsigned int AvcPacketType = 0;
+    unsigned int CompositionTime = 0;
+    unsigned int ChunkSize = 0;
+
     while(ptr-bsbuf < 6<<20)
     {
-        if(*ptr == 18)
+        //Parsing Tag Header 11-byte
+        TagType = *ptr;
+        TagDataSize = (((*(++ptr))<<16)|((*(++ptr))<<8)|(*(++ptr))) & 0xFFFFFF;
+        dPTS = ((*(++ptr))<<16)|((*(++ptr))<<8)|(*(++ptr))|((*(++ptr))<<24);
+        dPTS *= 90;
+        dPTS = (dPTS & 0x00000000ffffffffll);
+        StreamID = (((*(++ptr))<<16)|((*(++ptr))<<8)|(*(++ptr))) & 0xFFFFFF;
+
+        if(TagType == 18)
         {
-            //ui->textBrowser->append("\nScript Data!");
-            unsigned int sTagDataSz = ((*(++ptr))<<16)|((*(++ptr))<<8)|(*(++ptr));
-            //ui->textBrowser->append("Data size: " + QString::number(sTagDataSz));
-            ptr += 8 + sTagDataSz;
+            std::cout<<"SCRIPT TAG: "<<TagDataSize<<std::endl;
+            ptr += 1 + TagDataSize;
         }
-        else if(*ptr == 9)
+        else if(TagType == 9)
         {
-            //ui->textBrowser->append("\nVideo Data!");
-            unsigned int vTagDataSz = ((*(++ptr))<<16)|((*(++ptr))<<8)|(*(++ptr));
-            //ui->textBrowser->append("Data size: " + QString::number(vTagDataSz));
+            //std::cout<<"VIDEO TAG: "<<TagDataSize<<std::endl;
+            bAVStreamType = DTV_MUX_STREAM_TYPE_VIDEO;
+            FrameType = (*(++ptr))&0xF0;
+            CodecID = (*ptr)&0xF;
+            AvcPacketType = *(++ptr);
+            CompositionTime = ((*(++ptr))<<16)|((*(++ptr))<<8)|(*(++ptr));
 
-            dPTS = ((*(++ptr))<<16)|((*(++ptr))<<8)|(*(++ptr))|((*(++ptr))<<24);
-            dPTS *= 90;
-            dPTS = (dPTS & 0x00000000ffffffffll);
-            //ui->textBrowser->append("Timestamp: " + QString::number(dPTS));
-
-            unsigned int StreamID = ((*(++ptr))<<16)|((*(++ptr))<<8)|(*(++ptr));
-            //ui->textBrowser->append("StreamID: " + QString::number(StreamID));
-
-            unsigned int FrameType = (*(++ptr))&0xF0;
-            unsigned int CodecID = (*ptr)&0xF;
-            unsigned int AvcPacketType = *(++ptr);
-            unsigned int CompositionTime = ((*(++ptr))<<16)|((*(++ptr))<<8)|(*(++ptr));
             if(AvcPacketType == 0) // sequence
                 parseAVCDecoderConfigurationRecord();
             else if(AvcPacketType == 1) // NALU
-                parseVideoData(vTagDataSz-5);
-            //ptr += 8 + vTagDataSz;
+                parseVideoData(TagDataSize-5);
         }
-        else if(*ptr == 8)
+        else if(TagType == 8)
         {
-            //ui->textBrowser->append("\nAudio Data!");
-            unsigned int aTagDataSz = ((*(++ptr))<<16)|((*(++ptr))<<8)|(*(++ptr));
-            //ui->textBrowser->append("Data size: " + QString::number(aTagDataSz));
-            ptr += 8 + aTagDataSz;
+            //std::cout<<"AUDIO TAG: "<<TagDataSize<<std::endl;
+            bAVStreamType = DTV_MUX_STREAM_TYPE_AUDIO;
+            //ptr += 1 + TagDataSize;
+            AudioInfo = *(++ptr);
+            if((AudioInfo >> 4) == 10) // AAC
+            {
+                AACPacketType = *(++ptr);
+                //std::cout<<"SampleRate: "<<((AudioInfo&0xf)>>2)<<"Packet Type: "<<(unsigned)AACPacketType<<std::endl;
+                if(AACPacketType == 0) // sequence
+                {
+                    ptr += (TagDataSize-1);
+                }
+                else // raw data
+                {
+                    parseAudioData(TagDataSize-2);
+                }
+            }
+            else
+            {
+                ptr += TagDataSize; // skip whole audio tag
+            }
         }
         ptr += 4;
         //n++;
